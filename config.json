@@ -1,0 +1,19 @@
+{
+    "video": {
+        "path": "twice.mp4",
+        "width": 1024,
+        "height": 768
+    },
+
+    "model": {
+        "detection": {
+            "path": "detection.pth"
+        },
+        "recognition": {
+            "path": "recognition.pth"
+        }
+    },
+
+    "tracker": {
+    }
+}
