@@ -17,6 +17,7 @@ class VideoStream:
         self.frame_queue = Queue(maxsize=queue_size)
         self.thread = Thread(target=self._update, args=())
         self.thread.daemon = True
+        self.state = "pause"
 
         if not self.stream.isOpened():
             raise Exception("Fail to connect to video source %s" % source)
@@ -32,11 +33,14 @@ class VideoStream:
         return content
 
     def start(self):
+        self.state = "start"
         self.thread.start()
-        return self
+
+    def pause(self):
+        self.state = "pause"
 
     def stop(self):
-        self.stopped = True
+        self.state = "stop"
         self.thread.join()
 
     def read(self):
@@ -47,12 +51,12 @@ class VideoStream:
 
     def _update(self):
         """Thread to fill the stream frame buffer"""
-        while not self.stopped:
-            if not self.frame_queue.full():
+        while self.state != "stop":
+            if not self.frame_queue.full() and self.state != "pause":
                 ret, frame = self.stream.read()
 
                 if not ret:
-                    self.stopped = True
+                    self.state = "stop"
                     continue
 
                 frame = cv2.resize(frame, self.resolution)
