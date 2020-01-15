@@ -120,6 +120,7 @@ def main(args):
                 'frame': None
             }
             send_data(client_socket, data)
+            stream.state = "pause"
 
         # If it is tracking, then it should communicate with server
         if GLOBAL['tracking']['state']:

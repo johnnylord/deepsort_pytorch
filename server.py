@@ -37,17 +37,20 @@ class ClientThread(Thread):
     +----------------------------->>>>  tracking result from kalman filter
     """
 
-    def __init__(self, conn ,addr):
+    def __init__(self, conn ,addr, device):
         """
         Parameters:
             - conn: socket of connected client
             - addr: (ip, port) information
+            - device: cuda or cpu device
         """
         super().__init__()
         self.conn = conn
         self.addr = addr
+        self.device = device
 
         self.detector = fasterrcnn_resnet50_fpn(num_classes=91, pretrained=True)
+        self.detector.to(device)
         self.detector.eval()
 
         self.kalman = KalmanFilter()
@@ -129,7 +132,7 @@ class ClientThread(Thread):
                 time.sleep(0.1)
                 continue
 
-            if data['state'] == False:
+            if not data['state']:
                 self.mean = None
                 self.covariance = None
                 continue
@@ -143,15 +146,14 @@ class ClientThread(Thread):
             if self.mean is None and self.covariance is None:
                 self.mean, self.covariance = self.kalman.initiate(np.array(data['tlahs'][0]))
 
-            # TODO
             # Detect objects in frame with faster-RCNN and update kalman filter
             else:
                 # Using faster-rcnn to perform object detection
-                input = [torch.from_numpy(frame/255.).permute(2,0,1).float()]
+                input = [torch.from_numpy(frame/255.).permute(2,0,1).float().to(self.device)]
                 prediction = self.detector(input)[0]
-                boxes = prediction['boxes'].detach().numpy().tolist()
-                labels = prediction['labels'].detach().numpy().tolist()
-                scores = prediction['scores'].detach().numpy().tolist()
+                boxes = prediction['boxes'].detach().cpu().numpy().tolist()
+                labels = prediction['labels'].detach().cpu().numpy().tolist()
+                scores = prediction['scores'].detach().cpu().numpy().tolist()
 
                 # Filter out only bboxes with respect to person class
                 people = []
@@ -174,6 +176,13 @@ class ClientThread(Thread):
                                     [tl_x, tl_y, br_x, br_y])
                     ious.append(iou)
 
+                print("IOU between measurement and mean:", np.max(ious))
+                if np.max(ious) < 0.5:
+                    data['state'] = False
+                    data['tlahs'] = [self.mean.tolist()[:4]]
+                    self.mean = None
+                    self.covariance = None
+
                 # Update Kalman filter
                 measurement = people[np.argmax(ious)]
                 cx, cy = (measurement[0]+measurement[2])/2, (measurement[1]+measurement[3])/2
@@ -183,19 +192,17 @@ class ClientThread(Thread):
                                                 mean, covariance,
                                                 np.array([cx, cy, a, h]))
 
-                print("IOU between measurement and mean:", np.max(ious))
-                if np.max(ious) < 0.5:
-                    data['state'] = False
-                    self.mean = None
-                    self.covariance = None
-
             # Prepare data to send to client
             del data['frame']
-            data['tlahs'] = [self.mean.tolist()[:4]]
+
+            if data['state']:
+                data['tlahs'] = [self.mean.tolist()[:4]]
+
             self._send_data(data)
 
 def main(args):
 
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     clients = []
 
     # Launch Server
@@ -209,7 +216,7 @@ def main(args):
     while True:
         conn, addr = server_socket.accept()
         print("Connection from {}:{}".format(addr[0], addr[1]))
-        client = ClientThread(conn, addr)
+        client = ClientThread(conn, addr, device)
         client.start()
         clients.append(client)
 
