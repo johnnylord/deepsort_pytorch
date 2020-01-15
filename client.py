@@ -1,12 +1,11 @@
-import io
 import time
-import zlib
-import struct
 import socket
 import pickle
 import argparse
+from threading import Thread
 
 import cv2
+import numpy as np
 
 from multimedia import VideoStream
 
@@ -16,10 +15,13 @@ parser.add_argument("--ip", default="127.0.0.1", help="server ip to connect")
 parser.add_argument("--port", default="9999", help="serivce port")
 
 
+HEADER_SIZE = 10
+
 GLOBAL = {
     'tracking': {
         'topLeft': None,
         'bottomRight': None,
+        # 'tlahs': [],
         'state': False,
         'clicked': False
     },
@@ -27,6 +29,7 @@ GLOBAL = {
 
 def reset_global():
     global GLOBAL
+
     GLOBAL['tracking'] = {
         'topLeft': None,
         'bottomRight': None,
@@ -35,7 +38,6 @@ def reset_global():
     }
 
 def select_and_track(event, x, y, flags, param):
-
     global GLOBAL
 
     # if the left mouse button was clicked, record the starting (x, y) coordinate
@@ -55,13 +57,37 @@ def select_and_track(event, x, y, flags, param):
     else:
         pass
 
+def recv_data(conn):
+    full_msg = b''
+    new_msg = True
+
+    while True:
+        msg = conn.recv(4096)
+
+        if new_msg:
+            msglen = int(msg[:HEADER_SIZE])
+            new_msg = False
+
+        full_msg += msg
+
+        if len(full_msg)-HEADER_SIZE == msglen:
+            data = pickle.loads(full_msg[HEADER_SIZE:])
+            return data
+
+def send_data(conn, data):
+    global HEADER_SIZE
+
+    msg = pickle.dumps(data)
+    msg = bytes(f"{len(msg):<{HEADER_SIZE}}", 'utf-8')+msg
+    conn.sendall(msg)
+
 def main(args):
 
     # Connect to server
     # =================
-    # print("Connect to {}:{}".format(args['ip'], args['port']))
-    # client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    # client_socket.connect((args['ip'], int(args['port'])))
+    print("Connect to {}:{}".format(args['ip'], args['port']))
+    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    client_socket.connect((args['ip'], int(args['port'])))
 
     # Connect to video source
     # =======================
@@ -82,11 +108,43 @@ def main(args):
         # Get previous buffered frame if it is paused
         if stream.state == "pause" and prev_frame is not None:
             frame = prev_frame.copy()
-
         # Get new frame if it is started
         else:
             frame = stream.read()
             prev_frame = frame
+
+        # If it is tracking, then it should communicate with server
+        if GLOBAL['tracking']['state']:
+
+            # Send data to server to process frame
+            # ====================================
+            tl_x, tl_y = GLOBAL['tracking']['topLeft']
+            br_x, br_y = GLOBAL['tracking']['bottomRight']
+            cx, cy = (tl_x+br_x)/2, (tl_y+br_y)/2
+            w, h = (tl_x-br_x), (br_y-tl_y)
+            data = {
+                'tlahs': [(cx, cy, abs(w/h), h)],
+                'state': GLOBAL['tracking']['state'],
+                'frame': cv2.imencode(
+                                    '.jpg',
+                                    frame,
+                                    [int(cv2.IMWRITE_JPEG_QUALITY), 90])[1]
+            }
+            send_data(client_socket, data)
+
+            # Recv processed frame from server
+            # ===============================
+            data = recv_data(client_socket) # without frame information
+            print(data)
+
+            # Update tracking status
+            GLOBAL['tracking']['state'] = data['state']
+            if data['state']:
+                cx, cy, a, h = data['tlahs'][0]
+                tl_x, tl_y = int(cx-(a*h/2)), int(cy-h/2)
+                br_x, br_y = int(cx+(a*h/2)), int(cy+h/2)
+                GLOBAL['tracking']['topLeft'] = (tl_x, tl_y)
+                GLOBAL['tracking']['bottomRight'] = (br_x, br_y)
 
         # Show selected rectangle if user has clicked
         if GLOBAL['tracking']['clicked']:
@@ -100,6 +158,10 @@ def main(args):
         # - Green border on the screen when is in tracking
         if GLOBAL['tracking']['state']:
             cv2.rectangle(frame, (0, 0), stream.resolution, (0, 255, 0), 2)
+            cv2.rectangle(frame,
+                    GLOBAL['tracking']['topLeft'],
+                    GLOBAL['tracking']['bottomRight'],
+                    (0 ,255, 0), 2)
         else:
             cv2.rectangle(frame, (0, 0), stream.resolution, (0, 0, 255), 2)
 
