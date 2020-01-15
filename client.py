@@ -113,6 +113,14 @@ def main(args):
             frame = stream.read()
             prev_frame = frame
 
+        if GLOBAL['tracking']['clicked']:
+            data = {
+                'tlahs': [(0, 0, 0, 0)],
+                'state': GLOBAL['tracking']['state'],
+                'frame': None
+            }
+            send_data(client_socket, data)
+
         # If it is tracking, then it should communicate with server
         if GLOBAL['tracking']['state']:
 
@@ -145,6 +153,8 @@ def main(args):
                 br_x, br_y = int(cx+(a*h/2)), int(cy+h/2)
                 GLOBAL['tracking']['topLeft'] = (tl_x, tl_y)
                 GLOBAL['tracking']['bottomRight'] = (br_x, br_y)
+            else:
+                stream.state = "pause"
 
         # Show selected rectangle if user has clicked
         if GLOBAL['tracking']['clicked']:

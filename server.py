@@ -129,6 +129,11 @@ class ClientThread(Thread):
                 time.sleep(0.1)
                 continue
 
+            if data['state'] == False:
+                self.mean = None
+                self.covariance = None
+                continue
+
             frame = cv2.imdecode(data['frame'], cv2.IMREAD_COLOR)
 
             # Run Tracking algorithm
@@ -169,8 +174,6 @@ class ClientThread(Thread):
                                     [tl_x, tl_y, br_x, br_y])
                     ious.append(iou)
 
-                print("IOU between measurement and mean:", np.max(ious))
-
                 # Update Kalman filter
                 measurement = people[np.argmax(ious)]
                 cx, cy = (measurement[0]+measurement[2])/2, (measurement[1]+measurement[3])/2
@@ -179,6 +182,12 @@ class ClientThread(Thread):
                 self.mean, self.covariance = self.kalman.update(
                                                 mean, covariance,
                                                 np.array([cx, cy, a, h]))
+
+                print("IOU between measurement and mean:", np.max(ious))
+                if np.max(ious) < 0.5:
+                    data['state'] = False
+                    self.mean = None
+                    self.covariance = None
 
             # Prepare data to send to client
             del data['frame']
